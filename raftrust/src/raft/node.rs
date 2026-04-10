@@ -20,14 +20,23 @@ enum Role {
 }
 #[derive(Debug)]
 pub struct Node {
-    term: u64,
-    role: Role,
-    id: u16,
-    node_list: Option<HashMap<u16, Rc<SocketAddr>>>,
-    socketaddr: Option<Rc<SocketAddr>>,
-    heartbeat: u16,
-    uniform: Arc<Uniform<u16>>,
-    election_timout: Option<u16>,
+    //persistent states
+    current_term: u64,
+    voted_for: Option<u16>,
+    log: Vec<String>,
+    //Volatile state on all servers
+    commit_index: u64,
+    last_applied: u64,
+    //Volatile state on leaders
+    next_index: Vec<u64>,
+    match_index: Vec<u64>,
+    // role: Role,
+    // id: u16,
+    // node_list: Option<HashMap<u16, Rc<SocketAddr>>>,
+    // socketaddr: Option<Rc<SocketAddr>>,
+    // heartbeat: u16,
+    // uniform: Arc<Uniform<u16>>,
+    // election_timout: Option<u16>,
 }
 #[derive(Debug, Deserialize)]
 pub struct Configure {
@@ -159,7 +168,7 @@ impl Node {
         heart_sec: u16,
     ) -> Node {
         Node {
-            term: 0,
+            current_term: 0,
             role: Role::Follower,
             id: _loop_index,
             node_list: Option::None,
@@ -180,7 +189,7 @@ impl Display for Node {
         write!(
             f,
             "term:{:?} role:{:?} id:{:?} peeers:{:?} socketaddr:{:?}",
-            self.term, self.role, self.id, self.node_list, self.socketaddr,
+            self.current_term, self.role, self.id, self.node_list, self.socketaddr,
         )
     }
 }
