@@ -1,6 +1,10 @@
+use bincode::{Decode, Encode};
+use serde::{Deserialize, Serialize};
 use crate::raft::entry;
 use crate::raft::entry::Entry;
 
+
+#[derive(Debug,Encode,Decode,Clone)]
 pub struct AppendEntriesRpcRequest {
     //leader
     leader_term: u64,
@@ -11,12 +15,14 @@ pub struct AppendEntriesRpcRequest {
     //entry
     entries: Vec<Entry>,
 }
+#[derive(Debug,Encode,Decode,Clone)]
 pub struct AppendEntriesRpcResponse {
     //Results
     term_results: Option<u64>,
     success: Option<bool>,
 }
 
+#[derive(Debug,Encode,Decode,Clone)]
 pub struct RequestVoteRpcRequest {
     // Arguments
     term_candidate: u64,
@@ -24,11 +30,13 @@ pub struct RequestVoteRpcRequest {
     last_log_index: u64,
     last_log_term: u16,
 }
+#[derive(Debug,Encode,Decode,Clone)]
 pub struct RequestVoteRpcResponse {
     //Results
     term_results: u64,
     vote_granted: bool,
 }
+#[derive(Debug,Encode,Decode,Clone)]
 pub struct InstallSnapshotRpcRequest {
     // Arguments
     term_leader: u64,
@@ -39,6 +47,7 @@ pub struct InstallSnapshotRpcRequest {
     data: Vec<u8>,
     done: bool,
 }
+#[derive(Debug,Encode,Decode,Clone)]
 pub struct InstallSnapshotRpcResponse {
     //Results
     term_result: u64,

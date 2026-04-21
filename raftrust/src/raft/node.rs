@@ -1,6 +1,6 @@
 use std::{
     cell::RefCell,
-    collections::{HashMap, VecDeque, btree_set::Intersection},
+    collections::{HashMap, HashSet, VecDeque, btree_set::Intersection},
     error::Error,
     fmt::{Debug, Display},
     fs::File,
@@ -10,10 +10,13 @@ use std::{
     usize,
 };
 
+use crate::raft::entry::Entry;
 use crate::raft::node::Role::Leader;
 use rand::{RngExt, distr::Uniform};
 use serde::Deserialize;
-use crate::raft::entry::Entry;
+use tokio::net::TcpStream;
+use tokio::task::JoinHandle;
+use crate::raft::tcp::TcpConnections;
 
 #[derive(Debug)]
 pub enum Role {
@@ -40,8 +43,16 @@ pub struct Node {
     heartbeat: u64,
     uniform: Arc<Uniform<u64>>,
     election_timout: Option<u64>,
+    node_stream: Option<TcpConnections>,
 }
 
+
+
+#[derive(Debug, Clone)]
+pub struct NodeClonable {
+    id: u16,
+    node_list: HashMap<u16, SocketAddr>,
+}
 
 #[derive(Debug, Deserialize)]
 pub struct Configure {
@@ -205,6 +216,7 @@ impl Node {
             // create two line
             next_index,
             match_index,
+            node_stream: None,
         }
     }
 
@@ -235,24 +247,101 @@ impl Node {
         self.id
     }
 
-    pub fn this_term(&self) -> u64{
+    pub fn this_term(&self) -> u64 {
         self.current_term
     }
     pub fn node_prev_index(&self, id: u16) -> u64 {
-        let nextindex = self.next_index.get(&id).expect("get next index err").clone();
+        let nextindex = self
+            .next_index
+            .get(&id)
+            .expect("get next index err")
+            .clone();
         nextindex - 1
     }
 
     pub fn node_prev_term(&self, nodeid: u16) -> u64 {
-        let logindex :usize= self.node_prev_index(nodeid)
-            .try_into().unwrap();
+        let logindex: usize = self.node_prev_index(nodeid).try_into().unwrap();
         self.log[logindex].read_term()
     }
 
     pub fn leader_commit(&self) -> u64 {
         self.commit_index
     }
+
+    pub fn clone_this_node_socket(&self) -> SocketAddr {
+        self.node_list.get(&self.id).unwrap().clone()
+    }
+
+    pub fn nodelist_ref(&self) -> &HashMap<u16, SocketAddr> {
+        &self.node_list
+    }
+    pub fn get_this_socketaddr_ref(&self) -> &SocketAddr {
+        self.node_list
+            .get(&self.this_nodeid())
+            .expect("err when invoking get_this_socket_ref()")
+    }
+
+    pub fn node_length(&self) -> u16 {
+        self.node_list.len().try_into().expect("err in node_length")
+    }
+    //for check if unestablished node exsits.
+
+    pub fn check_socket_id(&self, this: &SocketAddr) -> u16 {
+        for (id,addr) in self.node_list.iter() {
+            if addr == this { return *id; }
+        }
+        panic!("socket id mismatch")
+    }
+
+    pub fn get_socket_by_id(&self,id: u16) -> SocketAddr {
+        self.node_list.get(&id).unwrap().clone()
+    }
+
+    pub fn clonable(&self) -> NodeClonable {
+        let id = self.id.clone();
+        let node_list = self.node_list.clone();
+        NodeClonable {
+            id,
+            node_list,
+        }
+    }
+
+    pub fn set_node_stream(&mut self, tcp_connections: TcpConnections){
+        self.node_stream = Some(tcp_connections);
+    }
+    pub fn get_node_stream(&self) -> &TcpConnections{
+        self.node_stream.as_ref().unwrap()
+    }
 }
+
+impl NodeClonable {
+    pub fn get_socket_by_id(&self,id: u16) -> SocketAddr {
+        self.node_list.get(&id).unwrap().clone()
+    }
+    pub fn node_len(&self) -> u16 {
+        self.node_list.len().try_into().expect("err in node_length")
+    }
+    pub fn this_nodeid(&self) -> u16 {
+        self.id
+    }
+    pub fn get_this_socketaddr_ref(&self) -> &SocketAddr {
+        self.node_list
+            .get(&self.id)
+            .expect("err when invoking get_this_socket_ref()")
+    }
+    pub fn return_remain_peer_set(&self) -> HashSet<u16> {
+        let mut peer_id_set = HashSet::new();
+        for i in (1..self.id).rev() {
+            peer_id_set.insert(i.try_into().expect("parse to u16 error"));
+        }
+        // println!("show your id: {} and set {:?}", self.id,peer_id_set);
+        peer_id_set
+    }
+
+
+}
+
+
 
 // impl Display for Node {
 //     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

@@ -1,28 +1,33 @@
 use raftrust::raft::node::Node;
-use raftrust::raft::node::Role;
-use raftrust::raft::node::Role::Leader;
-use raftrust::raft::raftrpc;
+use raftrust::raft::raftrpc::AppendEntriesRpcRequest;
 use std::error::Error;
 use std::fs::File;
 use std::time::Duration;
-use raftrust::raft::raftrpc::AppendEntriesRpcRequest;
+use bincode;
+use bincode::config;
 
 async fn listen(node: Node) {
     let mut heartbeat_interval = tokio::time::interval(Duration::from_millis(node.get_heartbeat()));
     loop {
         tokio::select! {
             _ = heartbeat_interval.tick(),if node.is_leader() => {
-                for (nodeid, socketaddr) in node.get_nodelist(){
-                    let heartbeat =
-                        AppendEntriesRpcRequest::create_heartbeatrpc(
-                        node.this_term(),
-                        node.this_nodeid(),
-                        node.node_prev_index(*nodeid),
-                        node.node_prev_term(*nodeid),
-                        node.leader_commit());
-                }
+
             },
         }
+    }
+}
+
+fn send_heartbeat(node: Node){
+    for (nodeid, socketaddr) in node.get_nodelist(){
+        let heartbeatrpc =
+            AppendEntriesRpcRequest::create_heartbeatrpc(
+                node.this_term(),
+                node.this_nodeid(),
+                node.node_prev_index(*nodeid),
+                node.node_prev_term(*nodeid),
+                node.leader_commit());
+        let encoded = bincode::encode_to_vec(heartbeatrpc, config::standard()).unwrap();
+
     }
 }
 

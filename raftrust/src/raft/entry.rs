@@ -1,6 +1,7 @@
+use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug,Serialize,Deserialize,Clone)]
+#[derive(Debug,Encode,Decode,Clone)]
 pub struct Entry {
     term: u64,
     command: Vec<u8>,
