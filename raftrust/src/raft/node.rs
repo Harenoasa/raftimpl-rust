@@ -12,11 +12,11 @@ use std::{
 
 use crate::raft::entry::Entry;
 use crate::raft::node::Role::Leader;
+use crate::raft::tcp::TcpConnections;
 use rand::{RngExt, distr::Uniform};
 use serde::Deserialize;
 use tokio::net::TcpStream;
 use tokio::task::JoinHandle;
-use crate::raft::tcp::TcpConnections;
 
 #[derive(Debug)]
 pub enum Role {
@@ -45,8 +45,6 @@ pub struct Node {
     election_timout: Option<u64>,
     node_stream: Option<TcpConnections>,
 }
-
-
 
 #[derive(Debug, Clone)]
 pub struct NodeClonable {
@@ -287,35 +285,34 @@ impl Node {
     //for check if unestablished node exsits.
 
     pub fn check_socket_id(&self, this: &SocketAddr) -> u16 {
-        for (id,addr) in self.node_list.iter() {
-            if addr == this { return *id; }
+        for (id, addr) in self.node_list.iter() {
+            if addr == this {
+                return *id;
+            }
         }
         panic!("socket id mismatch")
     }
 
-    pub fn get_socket_by_id(&self,id: u16) -> SocketAddr {
+    pub fn get_socket_by_id(&self, id: u16) -> SocketAddr {
         self.node_list.get(&id).unwrap().clone()
     }
 
     pub fn clonable(&self) -> NodeClonable {
         let id = self.id.clone();
         let node_list = self.node_list.clone();
-        NodeClonable {
-            id,
-            node_list,
-        }
+        NodeClonable { id, node_list }
     }
 
-    pub fn set_node_stream(&mut self, tcp_connections: TcpConnections){
+    pub fn set_node_stream(&mut self, tcp_connections: TcpConnections) {
         self.node_stream = Some(tcp_connections);
     }
-    pub fn get_node_stream(&self) -> &TcpConnections{
+    pub fn get_node_stream(&self) -> &TcpConnections {
         self.node_stream.as_ref().unwrap()
     }
 }
 
 impl NodeClonable {
-    pub fn get_socket_by_id(&self,id: u16) -> SocketAddr {
+    pub fn get_socket_by_id(&self, id: u16) -> SocketAddr {
         self.node_list.get(&id).unwrap().clone()
     }
     pub fn node_len(&self) -> u16 {
@@ -337,11 +334,7 @@ impl NodeClonable {
         // println!("show your id: {} and set {:?}", self.id,peer_id_set);
         peer_id_set
     }
-
-
 }
-
-
 
 // impl Display for Node {
 //     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
