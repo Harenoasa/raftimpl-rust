@@ -1,22 +1,22 @@
-use std::backtrace::Backtrace;
-use std::cell::RefCell;
 use crate::raft::node::{Node, NodeClonable};
 use rand::RngExt;
 use serde::de::IntoDeserializer;
 use serde_json::map::Values;
 use serde_json::{Value, json};
+use std::backtrace::Backtrace;
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Error, Formatter};
 use std::io::{Bytes, Write};
-use std::net::{SocketAddr};
+use std::net::SocketAddr;
 use std::ops::DerefMut;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpSocket, TcpStream};
-use tokio::sync::{mpsc, Mutex};
 use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinHandle;
 use tokio::time::{Interval, sleep, timeout};
 
@@ -24,7 +24,7 @@ use crate::raft::tcp;
 
 #[derive(Debug)]
 pub struct TcpConnections {
-    id_connection: HashMap<u16,TcpStream>,
+    id_connection: HashMap<u16, TcpStream>,
 }
 
 impl TcpConnections {
@@ -32,7 +32,7 @@ impl TcpConnections {
         // println!("Initializing TCP connection for {:?}", node_clonable);
         // let node_clonable = node_clonable.clone();
         let upper_min_index = node_clonable.this_nodeid() + 1;
-        let upper_max_index = node_clonable.node_len() ;
+        let upper_max_index = node_clonable.node_len();
         let thisid = node_clonable.clone().this_nodeid();
         // println!("thisid: {}", thisid);
         //Listening on node whose id is smaller than this node.
@@ -43,7 +43,6 @@ impl TcpConnections {
                 .await
                 .expect("bind tcp error");
             let node_set = node_clonable_clone.return_remain_peer_set();
-            // if thisid == 1 { println!("node_set : {:?}",node_set); }
             // 小节点使用的异步处理循环终止set
             let arc_mutex_down_node_set = Arc::new(Mutex::new(node_set));
             // println!("set have elements {:?}", connection_not_established_set);
@@ -55,14 +54,10 @@ impl TcpConnections {
             //创建mpsc，异步出去消费者给Self::receiver，生产者传给建立stream的异步线程
             let (stream_p, stream_c) = mpsc::unbounded_channel();
             // 监听下游节点的接收者
-            let downstream_result_handler = Self::receiver(stream_c,arc_mutex_down_node_set.clone());
+            let downstream_result_handler =
+                Self::receiver(stream_c, arc_mutex_down_node_set.clone());
             // 把未建立连接的节点放在set里，以异步的方式完成连接并删除set相应元素，以判断是否完成所有连接
-            while !arc_mutex_down_node_set
-                .clone()
-                .lock()
-                .await
-                .is_empty()
-            {
+            while !arc_mutex_down_node_set.clone().lock().await.is_empty() {
                 // println!("this nodeid : {}, set: {:?}",thisid , arc_mutex_down_node_set.clone().lock_owned().await);
                 while_count += 1;
                 if while_count > max_connect_retry {
@@ -85,12 +80,12 @@ impl TcpConnections {
                 let nodeset_clone = arc_mutex_down_node_set.clone();
                 let producer_clone = stream_p.clone();
                 tokio::spawn(async move {
-                    Self::random_sleep(100,200).await;
-                    println!("waiting to read coming msgs");
+                    Self::random_sleep(100, 200).await;
+                    // println!("waiting to read coming msgs");
                     let read_data = Self::retry_stream_read_operation(&mut stream, 10);
                     // unwrap一定是ok，失败重试，重试超出次数panic
                     let bytes = read_data.await.unwrap();
-                    println!("read_data completes");
+                    // println!("read_data completes");
                     let id = match TcpConnections::read_and_parse_id(bytes) {
                         Ok(id) => id,
                         Err(e) => {
@@ -98,52 +93,64 @@ impl TcpConnections {
                             return Err(e);
                         }
                     };
-                    let mut nodeset = nodeset_clone.lock().await;
-                    println!("got set lock");
-                    if nodeset.contains(&id) {
+                    // 尽可能减少持有锁的作用域
+                    let contains_id: bool;
+                    {
+                        let mut nodeset = nodeset_clone.lock().await;
+                        // println!("got set lock,set status :{:?}", nodeset);
+                        contains_id = nodeset.contains(&id);
+                        // println!("containsid?: {}", contains_id);
+                    }
+
+                    if contains_id == true {
                         // 响应，让发送方存储此连接
-                        println!("node id : {} 响应，让发送方存储此连接", id);
+                        // println!("node id : {} 响应，让发送方存储此连接", id);
                         let json = String::from("{\"admission\": true}\n");
                         let bytes = json.into_bytes();
-                        match Self::retry_write(&mut stream, bytes ,10).await {
+                        match Self::retry_write(&mut stream, bytes, 10).await {
                             Ok(_) => (),
                             Err(_) => (),
                         };
-                        producer_clone.send((id, stream)).unwrap_or_else(|e|{
-                            println!("mpsc error :: {}",e)
-                        });
+                        producer_clone
+                            .send((id, stream))
+                            .unwrap_or_else(|e| println!("mpsc error :: {}", e));
                     } else {
                         // 如果id重复，就发送拒接此连接的通知， 防止发送方超时等待
-                        println!("node id : {} 如果id重复，就发送拒接此连接的通知， 防止发送方超时等待", id);
+                        // println!(
+                        //     "node id : {} 如果id重复，就发送拒接此连接的通知， 防止发送方超时等待",
+                        //     id
+                        // );
                         let json = String::from("{\"admission\": false}\n");
                         let bytes = json.into_bytes();
-                        match Self::retry_write(&mut stream, bytes ,10).await {
+                        match Self::retry_write(&mut stream, bytes, 10).await {
                             Ok(_) => (),
                             Err(_) => (),
                         };
-                        producer_clone.send((id, stream)).unwrap_or_else(|e|{
-                            println!("mpsc error :: {}",e)
-                        });
+                        producer_clone
+                            .send((id, stream))
+                            .unwrap_or_else(|e| println!("mpsc error :: {}", e));
                     }
                     Ok(())
                 });
-                Self::random_sleep(900,1000).await;
+                Self::random_sleep(900, 1000).await;
             }
-            downstream_result_handler.await.map_err(|e| format!("error unwrapping downstream_result_handler ::{}",e))
+            downstream_result_handler
+                .await
+                .map_err(|e| format!("error unwrapping downstream_result_handler ::{}", e))
         });
 
         // 主动连接上游节点
         let mut upper_node_stream_producers = Vec::new();
         for i in upper_min_index..upper_max_index + 1 {
             // println!("up node is {}",i);
-            let bulleye_on_thisnodeid = node_clonable.this_nodeid();
+            let thisnodeid = node_clonable.this_nodeid();
             let socket = node_clonable.get_socket_by_id(i);
             let stream_produce = tokio::spawn(async move {
                 let max_reties = 20;
                 let mut retry_counter = 0;
                 // let retry_interval = Duration::from_millis(20);
                 loop {
-                    println!("log 3");
+                    // println!("log 3");
                     if retry_counter >= max_reties {
                         panic!("out of maximum retry times of connecting.")
                     }
@@ -154,25 +161,24 @@ impl TcpConnections {
                     //     "node id = {}, retry time = {}",
                     //     bulleye_on_thisnodeid, retry_counter
                     // );
-                    let mut stream = match Self::retry_conncetion(
-                        socket,
-                        10
-                    ).await {
+                    let mut stream = match Self::retry_conncetion(socket, 10).await {
                         Ok(stream) => stream,
                         Err(_) => panic!("tried maximum times"),
                     };
-                    println!("log 5 : connection received" );
-                    let request_json = format!("{{\"id\":{}}}\n", i);
+                    // println!("log 5 : connection received");
+                    // thisnodeid: 这个向高节点发送连接请求的节点id
+                    let request_json = format!("{{\"id\":{}}}\n", thisnodeid);
                     let bytes = request_json.into_bytes();
-                    match Self::retry_write( &mut stream,bytes, 10).await {
-                        Ok(_)  => println!("log 6 : write successful"),
-                        Err(e) => println!("write failed {}",e),
+                    match Self::retry_write(&mut stream, bytes, 10).await {
+                        Ok(_) => (),
+                        //lib64println!("log 6 : write successful"),
+                        Err(e) => println!("write failed {}", e),
                     };
 
                     match Self::check_response(&mut stream).await {
                         Ok(_) => {
-                            println!("log 7: response correct");
-                            return stream
+                            // println!("log 7: response correct");
+                            return stream;
                         }
                         Err(_) => continue,
                     };
@@ -183,7 +189,7 @@ impl TcpConnections {
 
         //等待所有handler完成，收集所有节点
         let downnodes = match downstream_establishment_handler.await.unwrap() {
-            Ok(rcmutex) => { rcmutex },
+            Ok(rcmutex) => rcmutex,
             Err(e) => {
                 panic!("{}", e)
             }
@@ -201,29 +207,40 @@ impl TcpConnections {
         }
         //merge two hashmap
         upnodes.extend(downnodes);
-        println!("node stream created! : {:?}", upnodes);
+        // println!("node stream for [{}] created! : {:?}", thisid, upnodes);
         TcpConnections {
             id_connection: upnodes,
         }
     }
 
-    fn receiver(mut downstream_receiver: UnboundedReceiver<(u16,TcpStream)>, mutex_remain_set:Arc<Mutex<HashSet<u16>>>) -> JoinHandle<HashMap<u16, TcpStream>> {
+    fn receiver(
+        mut downstream_receiver: UnboundedReceiver<(u16, TcpStream)>,
+        mutex_remain_set: Arc<Mutex<HashSet<u16>>>,
+    ) -> JoinHandle<HashMap<u16, TcpStream>> {
         tokio::spawn(async move {
             let mut downstream = HashMap::new();
+            if mutex_remain_set.lock().await.is_empty() {
+                return downstream;
+            }
             loop {
-                Self::random_sleep(900,1100);
+                let (id, stream) = downstream_receiver.recv().await.unwrap();
                 {
-                    let locked_set = mutex_remain_set.lock().await;
-                    println!("receiver get this lock");
-                    if locked_set.is_empty() { return downstream }
+                    let mut locked_set = mutex_remain_set.lock().await;
+                    // println!("receiver get this lock");
+                    if !locked_set.contains(&id) {
+                        continue;
+                    }
+                    downstream.insert(id, stream);
+                    locked_set.remove(&id);
+                    if locked_set.is_empty() {
+                        return downstream;
+                    }
                 }
-                let (id,stream) = downstream_receiver.recv().await.unwrap();
-                downstream.insert(id, stream);
             }
         })
     }
-    async fn read(stream: &mut TcpStream) -> Result<Vec<u8>, String> {
-        println!("log 1 start read function");
+    pub async fn read(stream: &mut TcpStream) -> Result<Vec<u8>, String> {
+        // println!("log 1 start read function");
         let mut allbytes = Vec::new();
         let mut buffer = [0; 1024];
         // let bt = Backtrace::capture();
@@ -232,18 +249,22 @@ impl TcpConnections {
             let n = match timeout(Duration::from_millis(1500), stream.read(&mut buffer)).await {
                 Ok(Ok(n)) if n == 0 => {
                     // println!("0 read detected during iteration.");
-                    continue
-                },
+                    continue;
+                }
                 Ok(Ok(n)) => {
-                    println!("received msg size ; => {}",n);
+                    // println!("received msg size ; => {}", n);
                     n
-                },
-                Ok(Err(e)) => return {
-                    println!("read err {}", e);
-                    Err(e.to_string()) },
+                }
+                Ok(Err(e)) => {
+                    return {
+                        // println!("read err {}", e);
+                        Err(e.to_string())
+                    };
+                }
                 Err(e) => {
-                    println!("log 2 : elapsed err {}", e);
-                    return Err(format!("connect overtime {}", e.to_string())) },
+                    // println!("log 2 : elapsed err {}", e);
+                    return Err(format!("connect overtime {}", e.to_string()));
+                }
             };
             if n == 0 {
                 println!("log 2 =>  end read function");
@@ -252,9 +273,11 @@ impl TcpConnections {
             allbytes.extend_from_slice(&buffer[0..n]);
             // 换行符\n对应的ASCII码：10
             let end_flag = 10;
-            if end_flag == buffer[n -1] { break };
+            if end_flag == buffer[n - 1] {
+                break;
+            };
         }
-        println!("read end");
+        // println!("read end");
         Ok(allbytes)
     }
     fn read_json(bytes: Vec<u8>) -> Result<Value, String> {
@@ -271,19 +294,6 @@ impl TcpConnections {
         value.get(index)
     }
 
-    // async fn write(stream: &mut TcpStream, bytes: &Vec<u8>) -> Result<i8, String> {
-    //     match stream.write(bytes).await {
-    //         Ok(n) => {
-    //             if n > 0 {
-    //                 Ok(1)
-    //             } else {
-    //                 Err(String::from("err writiing msgs : no msg written"))
-    //             }
-    //         }
-    //         Err(e) => Err(format!("Failed to write to id cause e : {}", e.to_string())),
-    //     }
-    // }
-
     fn parse_value_to_u16(id_value: &Value) -> Result<u16, String> {
         match id_value
             .as_u64()
@@ -296,19 +306,21 @@ impl TcpConnections {
     }
     fn read_and_parse_id(bytes: Vec<u8>) -> Result<u16, String> {
         let v: Value = Self::read_json(bytes)?;
-        println!("v : {}",v.to_string());
+        // println!("v : {}", v.to_string());
         let id_value = match v.get("id") {
-            Some(value) => { value.clone() },
+            Some(value) => value.clone(),
             None => {
                 println!("id not found in json data .");
-                return Err("id not found in json data .".to_string())
+                return Err("id not found in json data .".to_string());
             }
         };
-        let val_64 = match id_value.as_u64(){
+        let val_64 = match id_value.as_u64() {
             Some(val_64) => val_64,
             None => return Err("parse u64 err".to_string()),
         };
-        val_64.try_into().map_err(|e| {"TryFromIntError occured during parsing u16".to_string()})
+        val_64
+            .try_into()
+            .map_err(|e| "TryFromIntError occured during parsing u16".to_string())
     }
 
     async fn sleep_function(
@@ -349,16 +361,15 @@ impl TcpConnections {
     }
 
     async fn check_response(stream: &mut TcpStream) -> Result<(), String> {
-        println!("try read response");
-        let bytedata =
-            match Self::retry_stream_read_operation(stream,10 ).await{
+        // println!("try read response");
+        let bytedata = match Self::retry_stream_read_operation(stream, 10).await {
             Ok(data) => data,
             Err(e) => return Err(e),
         };
-        println!("response received");
+        // println!("response received");
 
         let values = Self::read_json(bytedata).unwrap();
-        println!("response values : {:?}", values);
+        // println!("response values : {:?}", values);
         match values.get("admission") {
             Some(value) => match value.as_bool() {
                 Some(true) => Ok(()),
@@ -370,7 +381,7 @@ impl TcpConnections {
     }
 
     async fn random_sleep(min: u64, max: u64) {
-        let ms ;
+        let ms;
         {
             let mut rng = rand::rng();
             ms = rng.random_range(min..=max); // 100 到 2000 毫秒
@@ -379,51 +390,54 @@ impl TcpConnections {
         sleep(Duration::from_millis(ms)).await;
     }
 
-    async fn retry_stream_read_operation(stream: &mut TcpStream, max_attempts: u32) -> Result<Vec<u8>, String>
-    {
-        Self::random_sleep(100,200).await;
+    async fn retry_stream_read_operation(
+        stream: &mut TcpStream,
+        max_attempts: u32,
+    ) -> Result<Vec<u8>, String> {
+        Self::random_sleep(100, 200).await;
         for attempt in 1..=max_attempts {
             match Self::read(stream).await {
                 Ok(val) => return Ok(val),
                 Err(e) if attempt < max_attempts => {
                     println!("Attempt read {} failed: {}, retrying...", attempt, e);
-                    Self::random_sleep(100,200).await;
-                },
-                Err(e) => panic!("All {} attempts failed. Last error: {}", max_attempts, e),
-            }
-        }
-        unreachable!()
-    }
-    async fn retry_write(stream:&mut TcpStream, bytes: Vec<u8>, max_attempts: u32) -> Result<(), String>
-    {
-        for attempt in 1..=max_attempts {
-            match stream.write_all(&bytes).await {
-                Ok(val) => return Ok(val),
-                Err(e) if attempt < max_attempts => {
-                    println!("Attempt write {} failed: {}, retrying...", attempt, e);
-                    tokio::time::sleep(Duration::from_millis(100 * attempt as u64)).await;
+                    Self::random_sleep(100, 200).await;
                 }
                 Err(e) => panic!("All {} attempts failed. Last error: {}", max_attempts, e),
             }
         }
         unreachable!()
     }
-    async fn retry_conncetion(socket: SocketAddr,max_attempts: u32) -> Result<TcpStream, String>
-    {
+    pub async fn retry_write(
+        stream: &mut TcpStream,
+        bytes: Vec<u8>,
+        max_attempts: u32,
+    ) -> Result<(), String> {
+        for attempt in 1..=max_attempts {
+            match stream.write_all(&bytes).await {
+                Ok(val) => return Ok(val),
+                Err(e) if attempt < max_attempts => {
+                    println!("Attempt write {} failed: {}, retrying...", attempt, e);
+                    tokio::time::sleep(Duration::from_millis(100 as u64)).await;
+                }
+                Err(e) => panic!("All {} attempts failed. Last error: {}", max_attempts, e),
+            }
+        }
+        unreachable!()
+    }
+    async fn retry_conncetion(socket: SocketAddr, max_attempts: u32) -> Result<TcpStream, String> {
         for attempt in 1..=max_attempts {
             let tcpsocket = TcpSocket::new_v4().unwrap();
-            ;
             match timeout(Duration::from_millis(200), tcpsocket.connect(socket)).await {
                 Ok(Ok(val)) => return Ok(val),
-                Ok(Err(e))  if attempt < max_attempts => {
+                Ok(Err(e)) if attempt < max_attempts => {
                     println!("Attempt connection {} failed: {}, retrying...", attempt, e);
-                    tokio::time::sleep(Duration::from_millis(100 * attempt as u64)).await;
-                },
-                Ok(Err(e)) =>  panic!("All {} attempts failed. Last error: {}", max_attempts, e),
+                    tokio::time::sleep(Duration::from_millis(100 as u64)).await;
+                }
+                Ok(Err(e)) => panic!("All {} attempts failed. Last error: {}", max_attempts, e),
                 Err(e) if attempt < max_attempts => {
                     println!("Attempt connect {} timeout: {}, retrying...", attempt, e);
-                    tokio::time::sleep(Duration::from_millis(100 * attempt as u64)).await;
-                },
+                    tokio::time::sleep(Duration::from_millis(100 as u64)).await;
+                }
                 Err(_) => panic!("Timed out while establishing connection."),
             }
         }
@@ -441,7 +455,7 @@ impl TcpConnections {
                 Ok(val) => return Ok(val),
                 Err(e) if attempt < max_attempts => {
                     println!("Attempt {} failed: {}, retrying...", attempt, e);
-                    tokio::time::sleep(Duration::from_millis(100 * attempt as u64)).await;
+                    tokio::time::sleep(Duration::from_millis(100 as u64)).await;
                 }
                 Err(e) => panic!("All {} attempts failed. Last error: {}", max_attempts, e),
             }

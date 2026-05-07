@@ -1,17 +1,18 @@
-use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug,Encode,Decode,Clone)]
+use crate::raft::command::Command;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Entry {
     term: u64,
-    command: Vec<u8>,
+    cmd: Command,
 }
+
 impl Entry {
-    pub fn read_term (&self) -> u64{
+    pub fn read_term(&self) -> u64 {
         self.term
     }
+    pub fn read_command(&self) -> &Command {
+        &self.cmd
+    }
 }
-
-
-
-
